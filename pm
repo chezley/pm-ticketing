@@ -24,6 +24,7 @@ Commands:
   pm unblock N               Move a blocked ticket back to open.
   pm done N ["summary"]      Mark a ticket done and close the issue.
   pm release N ["reason"]    Give up an in-progress ticket, back to open.
+  pm reopen N "reason"       Reopen a done ticket for review (problem found).
   pm show N                  Print full ticket detail + history.
   pm area N frontend|backend|both
                              Flag whether a ticket touches the front-end,
@@ -61,7 +62,8 @@ S_OPEN = f"{PREFIX}:open"
 S_INPROGRESS = f"{PREFIX}:in-progress"
 S_BLOCKED = f"{PREFIX}:blocked"
 S_DONE = f"{PREFIX}:done"
-STATUS_LABELS = [S_OPEN, S_INPROGRESS, S_BLOCKED, S_DONE]
+S_REVIEW = f"{PREFIX}:review"
+STATUS_LABELS = [S_OPEN, S_INPROGRESS, S_BLOCKED, S_DONE, S_REVIEW]
 
 # Priority labels. Lower number = higher priority; claimed first.
 PRIORITIES = [f"{PREFIX}:p0", f"{PREFIX}:p1", f"{PREFIX}:p2", f"{PREFIX}:p3"]
@@ -83,6 +85,7 @@ LABEL_DEFS = [
     (S_INPROGRESS, "fbca04", "Ticket currently being worked by an agent"),
     (S_BLOCKED, "b60205", "Ticket blocked, needs attention before work continues"),
     (S_DONE, "0e8a16", "Ticket completed"),
+    (S_REVIEW, "e99695", "Ticket reopened: a problem was found with completed work"),
     (PRIORITIES[0], "5319e7", "Priority 0 - highest, claim first"),
     (PRIORITIES[1], "8250df", "Priority 1"),
     (PRIORITIES[2], "a371f7", "Priority 2"),
@@ -282,13 +285,15 @@ def _board(repo):
     issues = list_issues(repo, state="open")
     # done tickets are closed, so query them separately (recent 30)
     done = list_issues(repo, labels=[S_DONE], state="closed", limit=30)
-    buckets = {S_INPROGRESS: [], S_BLOCKED: [], S_OPEN: [], "other": []}
+    buckets = {S_INPROGRESS: [], S_BLOCKED: [], S_REVIEW: [], S_OPEN: [], "other": []}
     for i in issues:
         names = issue_label_names(i)
         if S_INPROGRESS in names:
             buckets[S_INPROGRESS].append(i)
         elif S_BLOCKED in names:
             buckets[S_BLOCKED].append(i)
+        elif S_REVIEW in names:
+            buckets[S_REVIEW].append(i)
         elif S_OPEN in names:
             buckets[S_OPEN].append(i)
         else:
@@ -318,7 +323,7 @@ def cmd_list(args):
     buckets, done = _board(repo)
     if args.status:
         key = {"open": S_OPEN, "in-progress": S_INPROGRESS,
-               "blocked": S_BLOCKED, "done": S_DONE}.get(args.status)
+               "blocked": S_BLOCKED, "done": S_DONE, "review": S_REVIEW}.get(args.status)
         if key == S_DONE:
             print(f"DONE ({len(done)})")
             for i in sorted(done, key=lambda x: -x["number"]):
@@ -334,6 +339,7 @@ def cmd_list(args):
     print(f"  in-progress: {len(buckets[S_INPROGRESS])}   "
           f"open: {len(buckets[S_OPEN])}   "
           f"blocked: {len(buckets[S_BLOCKED])}   "
+          f"review: {len(buckets[S_REVIEW])}   "
           f"done(recent): {len(done)}\n")
     print("IN PROGRESS")
     for i in sorted(buckets[S_INPROGRESS], key=issue_priority_rank):
@@ -341,6 +347,10 @@ def cmd_list(args):
     print("\nOPEN")
     for i in sorted(buckets[S_OPEN], key=lambda x: (issue_priority_rank(x), x["number"])):
         print(_fmt_line(repo, i))
+    if buckets[S_REVIEW]:
+        print("\nREVIEW")
+        for i in buckets[S_REVIEW]:
+            print(_fmt_line(repo, i))
     if buckets[S_BLOCKED]:
         print("\nBLOCKED")
         for i in buckets[S_BLOCKED]:
@@ -349,6 +359,7 @@ def cmd_list(args):
 
 def _claimable(repo):
     issues = list_issues(repo, labels=[S_OPEN], state="open")
+    issues += list_issues(repo, labels=[S_REVIEW], state="open")
     issues = [i for i in issues
               if S_INPROGRESS not in issue_label_names(i)
               and S_BLOCKED not in issue_label_names(i)]
@@ -511,6 +522,17 @@ def cmd_done(args):
     print(f"#{args.number} -> done (closed).")
 
 
+def cmd_reopen(args):
+    repo = detect_repo(args.repo)
+    agent = agent_id(args.agent)
+    run_gh(["issue", "reopen", str(args.number)], repo=repo)
+    set_status(repo, args.number, S_REVIEW)
+    add_comment(repo, args.number,
+                f"{OWNER_MARK}: agent=none ts={now_iso()}\n"
+                f":warning: **Reopened for review by @{agent}:** {args.reason}")
+    print(f"#{args.number} -> review (reopened).")
+
+
 def cmd_area(args):
     repo = detect_repo(args.repo)
     area = f"area:{args.area}"
@@ -569,11 +591,11 @@ def build_parser():
     sp.set_defaults(func=cmd_create)
 
     sp = sub.add_parser("list", help="show the board")
-    sp.add_argument("--status", choices=["open", "in-progress", "blocked", "done"])
+    sp.add_argument("--status", choices=["open", "in-progress", "blocked", "done", "review"])
     sp.set_defaults(func=cmd_list)
 
     sp = sub.add_parser("status", help="show the board (alias for list)")
-    sp.add_argument("--status", choices=["open", "in-progress", "blocked", "done"])
+    sp.add_argument("--status", choices=["open", "in-progress", "blocked", "done", "review"])
     sp.set_defaults(func=cmd_list)
 
     sp = sub.add_parser("next", help="show the next claimable ticket")
@@ -608,6 +630,11 @@ def build_parser():
     sp.add_argument("number")
     sp.add_argument("summary", nargs="?")
     sp.set_defaults(func=cmd_done)
+
+    sp = sub.add_parser("reopen", help="reopen a done ticket for review")
+    sp.add_argument("number")
+    sp.add_argument("reason")
+    sp.set_defaults(func=cmd_reopen)
 
     sp = sub.add_parser("show", help="print full ticket detail + history")
     sp.add_argument("number")

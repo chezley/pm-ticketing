@@ -18,7 +18,7 @@ issues, so the board *is* the shared memory:
 | Concept        | How it is stored                                              |
 |----------------|--------------------------------------------------------------|
 | A ticket       | A GitHub Issue                                               |
-| Status         | Exactly one mutually-exclusive label: `pm:open`, `pm:in-progress`, `pm:blocked`, `pm:done` |
+| Status         | Exactly one mutually-exclusive label: `pm:open`, `pm:in-progress`, `pm:blocked`, `pm:done`, `pm:review` |
 | Priority       | `pm:p0` (highest) … `pm:p3` (lowest)                         |
 | Owner          | A structured `pm-owner:` comment (latest wins)              |
 | Working memory | `pm-note:` comments — the running log of what was done/decided |
@@ -75,6 +75,19 @@ pm done 42 "rate limiting live, 100/min, tests green"
 
 Point several agents at the same repo at once — the claim protocol guarantees
 each ticket goes to exactly one of them.
+
+## Reopening for review
+
+If a problem is found with work that was already marked `pm:done`, don't open
+a fresh ticket — reopen the original one so its history stays attached:
+
+```bash
+pm reopen 42 "rate limiting doesn't apply to the /health endpoint"
+```
+
+This reopens the closed issue and flips it to `pm:review`. Review tickets are
+claimable just like open ones (`pm claim` picks them up alongside `pm:open`
+tickets), so any agent can pick it back up, fix it, and `pm done` it again.
 
 ## Running the fleet automatically
 
@@ -134,7 +147,7 @@ claimers, increase the settle window accordingly.
 ```
 pm init                      Create the pm:* and area:* labels in the repo.
 pm create "Title" --area frontend|backend|both [--body B] [--priority 0-3] [--label L ...]
-pm list [--status open|in-progress|blocked|done]
+pm list [--status open|in-progress|blocked|done|review]
 pm status                    Alias for list.
 pm next                      Show the next claimable ticket (no claim).
 pm claim [N]                 Atomically claim the next open ticket (or N).
@@ -144,6 +157,7 @@ pm block N "reason"          Move ticket to blocked.
 pm unblock N                 Return a blocked ticket to open.
 pm release N ["reason"]      Give up an in-progress ticket -> open.
 pm done N ["summary"]        Mark done and close the issue.
+pm reopen N "reason"         Reopen a done ticket for review -> pm:review.
 pm area N frontend|backend|both
                               Flag whether a ticket touches the front-end,
                               back-end, or both.

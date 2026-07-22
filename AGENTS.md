@@ -39,6 +39,9 @@ tracking — read and write state only through `pm`.
   `pm log` note so no context is lost between agents.
 - **Never edit issue labels or status by hand** (no `gh issue edit` for status).
   Always go through `pm` so the state machine stays consistent.
+- **Found a problem with already-done work?** Don't open a new ticket —
+  `pm reopen N "reason"` puts it back on the board as `pm:review`, claimable
+  like any open ticket.
 
 ## Quick reference
 
@@ -52,6 +55,7 @@ pm block N "reason"         # -> blocked
 pm unblock N                # blocked -> open
 pm release N ["reason"]     # give up an in-progress ticket -> open
 pm done N ["summary"]       # -> done + close the issue
+pm reopen N "reason"        # done ticket had a problem -> pm:review, reopened
 ```
 
 Identify yourself with `--agent <name>` or the `PM_AGENT` env var so ownership in
