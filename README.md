@@ -76,6 +76,34 @@ pm done 42 "rate limiting live, 100/min, tests green"
 Point several agents at the same repo at once — the claim protocol guarantees
 each ticket goes to exactly one of them.
 
+## Running the fleet automatically
+
+`run-agent.sh` wraps that loop into a single autonomous worker: it claims a
+ticket, hands it to a headless Claude Code agent (`claude -p ...`) to
+implement, waits for the agent to `pm done` / `pm block` it, then repeats
+until there is nothing left to claim. If a run errors out or leaves a ticket
+in-progress without closing it, the worker releases it back to the pool so it
+isn't stranded.
+
+```bash
+PM_REPO=owner/repo PM_AGENT=agent-a ./run-agent.sh
+```
+
+Useful env vars: `PM_MAX` (stop after N tickets), `PM_IDLE_EXIT` (1 = exit
+when the board is empty, default; 0 = poll and wait), `PM_POLL` (seconds
+between polls when idle-waiting), `CLAUDE_BIN` / `CLAUDE_ARGS` (override the
+Claude Code binary/flags, default `--dangerously-skip-permissions`).
+
+`run-fleet.sh` launches several `run-agent.sh` workers at once, each with its
+own agent identity, and tails their logs:
+
+```bash
+PM_REPO=owner/repo ./run-fleet.sh 4   # 4 parallel workers, logs in ./fleet-logs/
+```
+
+They all read and claim from the same board, so the concurrency-safe claim
+protocol below is what keeps them from colliding.
+
 ## Concurrency model — how claiming stays safe
 
 GitHub has no compare-and-swap on labels, and a fleet may even share one GitHub
@@ -130,7 +158,10 @@ race — useful for `while pm claim; do ...; done` loops) · `1` error.
 
 - `pm` — the CLI (single file, no third-party deps).
 - `install.sh` — installer + label bootstrap.
+- `run-agent.sh` — one autonomous worker: claim -> dispatch to Claude Code -> repeat.
+- `run-fleet.sh` — launches several `run-agent.sh` workers against one repo.
 - `AGENTS.md` — the work contract to give your agents.
+- `CLAUDE.md` — the same contract, read automatically by Claude Code.
 - `README.md` — this file.
 
 ## Customising
