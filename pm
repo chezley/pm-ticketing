@@ -382,18 +382,27 @@ def _attempt_claim(repo, number, agent, settle):
     """Concurrency-safe claim of a single ticket.
 
     Protocol (deterministic winner even under a shared GitHub account):
-      1. Post a claim marker comment with a unique nonce.
-      2. Wait `settle` seconds for any competing claims to land.
-      3. Re-read all claim markers; the winner is the earliest comment
-         (by createdAt, tie-broken by comment id -> a total order all
-         agents compute identically).
-      4. Winner flips labels open->in-progress and records ownership.
+      1. Snapshot the highest existing comment id (the baseline) so stale
+         claim markers left over from an earlier, already-resolved race
+         (claimed-then-released, blocked, done, reopened, ...) can never be
+         mistaken for a live competitor.
+      2. Post a claim marker comment with a unique nonce.
+      3. Wait `settle` seconds for any competing claims to land.
+      4. Re-read comments newer than the baseline; the winner is the
+         earliest one (by createdAt, tie-broken by comment id -> a total
+         order all agents compute identically).
+      5. Winner flips labels open->in-progress and records ownership.
          Losers back off.
     Returns True if this agent won the ticket.
     """
     # Bail early if it is already taken.
     if S_INPROGRESS in issue_label_names_now(repo, number):
         return False
+
+    # Anything already on the issue predates this attempt and belongs to a
+    # previous race (won or lost, resolved or abandoned) — never a
+    # competitor in this one, no matter how long it's been sitting there.
+    baseline_id = max((c["id"] for c in issue_comments(repo, number)), default=0)
 
     nonce = uuid.uuid4().hex
     add_comment(repo, number,
@@ -403,6 +412,8 @@ def _attempt_claim(repo, number, agent, settle):
 
     claims = []
     for c in issue_comments(repo, number):
+        if c["id"] <= baseline_id:
+            continue
         kv = parse_marker(c["body"], CLAIM_MARK)
         if kv and "nonce" in kv:
             claims.append((c["created_at"], c["id"], kv["nonce"], kv.get("agent")))
